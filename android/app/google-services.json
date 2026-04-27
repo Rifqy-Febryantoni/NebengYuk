@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "42287571424",
+    "project_id": "nebengyuk-7129f",
+    "storage_bucket": "nebengyuk-7129f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:42287571424:android:ba4b1dbfdda11b8e330b85",
+        "android_client_info": {
+          "package_name": "com.example.nebengyuk"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAOyjDCqnjOsm-B0RCxcfUgIW-Og95pWwg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
