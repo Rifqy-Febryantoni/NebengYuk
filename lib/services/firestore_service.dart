@@ -9,9 +9,8 @@ class FirestoreService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final Uuid _uuid = const Uuid();
 
-  // ==================== RIDES ====================
+  // ==================== RIDES (ROOT HUB) ====================
 
-  // Create a new ride
   Future<String> createRide(RideModel ride) async {
     final docId = _uuid.v4();
     await _firestore
@@ -21,9 +20,6 @@ class FirestoreService {
     return docId;
   }
 
-  // Get available rides (scheduled, with seats > 0)
-  // Note: Using minimal Firestore filters to avoid requiring composite indexes.
-  // Additional filtering (seats, time) is done client-side in ride_results.dart.
   Stream<List<RideModel>> getAvailableRides() {
     return _firestore
         .collection(AppConstants.ridesCollection)
@@ -35,7 +31,6 @@ class FirestoreService {
             .toList());
   }
 
-  // Get rides by driver
   Stream<List<RideModel>> getDriverRides(String driverId) {
     return _firestore
         .collection(AppConstants.ridesCollection)
@@ -50,7 +45,6 @@ class FirestoreService {
     });
   }
 
-  // Get a single ride stream
   Stream<RideModel?> getRideStream(String rideId) {
     return _firestore
         .collection(AppConstants.ridesCollection)
@@ -64,7 +58,6 @@ class FirestoreService {
     });
   }
 
-  // Update ride status
   Future<void> updateRideStatus(String rideId, String status) async {
     await _firestore
         .collection(AppConstants.ridesCollection)
@@ -72,7 +65,6 @@ class FirestoreService {
         .update({'status': status});
   }
 
-  // Update available seats
   Future<void> updateAvailableSeats(String rideId, int seats) async {
     await _firestore
         .collection(AppConstants.ridesCollection)
@@ -80,7 +72,6 @@ class FirestoreService {
         .update({'availableSeats': seats});
   }
 
-  // Delete ride
   Future<void> deleteRide(String rideId) async {
     await _firestore
         .collection(AppConstants.ridesCollection)
@@ -88,51 +79,42 @@ class FirestoreService {
         .delete();
   }
 
-  // ==================== BOOKINGS ====================
+  // ==================== BOOKINGS (SUBCOLLECTIONS) ====================
 
-  // Create a booking and decrement seats atomically
   Future<String> createBooking(BookingModel booking) async {
     final docId = _uuid.v4();
 
     await _firestore.runTransaction((transaction) async {
-      // Read the ride document
       final rideRef = _firestore
           .collection(AppConstants.ridesCollection)
           .doc(booking.rideId);
       final rideDoc = await transaction.get(rideRef);
 
-      if (!rideDoc.exists) {
-        throw Exception('Ride not found');
-      }
+      if (!rideDoc.exists) throw Exception('Ride not found');
 
       final currentSeats = rideDoc.data()!['availableSeats'] as int;
-      if (currentSeats <= 0) {
-        throw Exception('No seats available');
-      }
+      if (currentSeats <= 0) throw Exception('No seats available');
 
-      // Decrement seats
       transaction.update(rideRef, {'availableSeats': currentSeats - 1});
 
-      // If this was the last seat, mark as fully booked
       if (currentSeats - 1 == 0) {
         transaction.update(rideRef, {'status': AppConstants.statusFullyBooked});
       }
 
-      // Create the booking
-      final bookingRef = _firestore
-          .collection(AppConstants.bookingsCollection)
-          .doc(docId);
+      // 🚀 NEW: Nesting the booking specifically under the ride document
+      final bookingRef = rideRef.collection('bookings').doc(docId);
       transaction.set(bookingRef, booking.copyWith(bookingId: docId).toMap());
     });
 
     return docId;
   }
 
-  // Get bookings for a ride
+  // 🚀 NEW: Scoped query pointing directly to the ride's subcollection
   Stream<List<BookingModel>> getRideBookings(String rideId) {
     return _firestore
-        .collection(AppConstants.bookingsCollection)
-        .where('rideId', isEqualTo: rideId)
+        .collection(AppConstants.ridesCollection)
+        .doc(rideId)
+        .collection('bookings')
         .snapshots()
         .map((snapshot) {
       final bookings = snapshot.docs
@@ -143,10 +125,10 @@ class FirestoreService {
     });
   }
 
-  // Get bookings by passenger
+  // 🚀 NEW: Collection Group Query. Finds bookings for a passenger across ALL rides.
   Stream<List<BookingModel>> getPassengerBookings(String passengerId) {
     return _firestore
-        .collection(AppConstants.bookingsCollection)
+        .collectionGroup('bookings')
         .where('passengerId', isEqualTo: passengerId)
         .snapshots()
         .map((snapshot) {
@@ -158,10 +140,12 @@ class FirestoreService {
     });
   }
 
-  // Get single booking stream
-  Stream<BookingModel?> getBookingStream(String bookingId) {
+  // 🚀 NEW: Requires rideId to locate the specific subcollection
+  Stream<BookingModel?> getBookingStream(String rideId, String bookingId) {
     return _firestore
-        .collection(AppConstants.bookingsCollection)
+        .collection(AppConstants.ridesCollection)
+        .doc(rideId)
+        .collection('bookings')
         .doc(bookingId)
         .snapshots()
         .map((doc) {
@@ -172,15 +156,16 @@ class FirestoreService {
     });
   }
 
-  // Update booking status
-  Future<void> updateBookingStatus(String bookingId, String status) async {
+  // 🚀 NEW: Requires rideId to locate and update the correct booking
+  Future<void> updateBookingStatus(String rideId, String bookingId, String status) async {
     await _firestore
-        .collection(AppConstants.bookingsCollection)
+        .collection(AppConstants.ridesCollection)
+        .doc(rideId)
+        .collection('bookings')
         .doc(bookingId)
         .update({'status': status});
   }
 
-  // Reject booking and restore seat
   Future<void> rejectBooking(String bookingId, String rideId) async {
     await _firestore.runTransaction((transaction) async {
       final rideRef = _firestore
@@ -192,72 +177,79 @@ class FirestoreService {
         final currentSeats = rideDoc.data()!['availableSeats'] as int;
         transaction.update(rideRef, {'availableSeats': currentSeats + 1});
 
-        // If was fully booked, set back to scheduled
         if (rideDoc.data()!['status'] == AppConstants.statusFullyBooked) {
           transaction.update(rideRef, {'status': AppConstants.statusScheduled});
         }
       }
 
-      final bookingRef = _firestore
-          .collection(AppConstants.bookingsCollection)
-          .doc(bookingId);
+      // 🚀 NEW: Pointing to the subcollection
+      final bookingRef = rideRef.collection('bookings').doc(bookingId);
       transaction.update(bookingRef, {'status': AppConstants.bookingRejected});
     });
   }
 
-  // ==================== DRIVER LOCATION ====================
+  // ==================== DRIVER LOCATION (FLATTENED INTO RIDE) ====================
 
-  // Update driver location
-  Future<void> updateDriverLocation(
-    String rideId,
-    String driverId,
-    double lat,
-    double lng,
-  ) async {
+  // 🚀 NEW: Instead of a separate collection, we inject live coords directly into the active ride
+  Future<void> updateDriverLocation(String rideId, String driverId, double lat, double lng) async {
     await _firestore
-        .collection(AppConstants.driverLocationsCollection)
+        .collection(AppConstants.ridesCollection)
         .doc(rideId)
-        .set({
-      'driverId': driverId,
-      'lat': lat,
-      'lng': lng,
-      'updatedAt': FieldValue.serverTimestamp(),
+        .update({
+      'driverLiveLat': lat,
+      'driverLiveLng': lng,
     });
   }
 
-  // Get driver location stream
+  // 🚀 NEW: Extracts the newly injected coordinates from the ride document
   Stream<Map<String, dynamic>?> getDriverLocationStream(String rideId) {
     return _firestore
-        .collection(AppConstants.driverLocationsCollection)
+        .collection(AppConstants.ridesCollection)
         .doc(rideId)
         .snapshots()
-        .map((doc) => doc.data());
+        .map((doc) {
+      if (doc.exists && doc.data() != null) {
+        final data = doc.data()!;
+        if (data.containsKey('driverLiveLat') && data.containsKey('driverLiveLng')) {
+          return {
+            'lat': data['driverLiveLat'],
+            'lng': data['driverLiveLng'],
+          };
+        }
+      }
+      return null;
+    });
   }
 
-  // Remove driver location
+  // 🚀 NEW: Cleans up the live coordinates once the ride finishes
   Future<void> removeDriverLocation(String rideId) async {
     await _firestore
-        .collection(AppConstants.driverLocationsCollection)
+        .collection(AppConstants.ridesCollection)
         .doc(rideId)
-        .delete();
+        .update({
+      'driverLiveLat': FieldValue.delete(),
+      'driverLiveLng': FieldValue.delete(),
+    });
   }
 
-  // ==================== NOTIFICATIONS ====================
+  // ==================== NOTIFICATIONS (NESTED UNDER USERS) ====================
 
-  // Create notification
   Future<void> createNotification(NotificationModel notification) async {
     final docId = _uuid.v4();
+    // 🚀 NEW: Notifications are now securely nested under the specific user's document
     await _firestore
-        .collection(AppConstants.notificationsCollection)
+        .collection(AppConstants.usersCollection)
+        .doc(notification.userId)
+        .collection('notifications')
         .doc(docId)
         .set(notification.toMap());
   }
 
-  // Get user notifications
   Stream<List<NotificationModel>> getUserNotifications(String userId) {
     return _firestore
-        .collection(AppConstants.notificationsCollection)
-        .where('userId', isEqualTo: userId)
+        .collection(AppConstants.usersCollection)
+        .doc(userId)
+        .collection('notifications')
         .snapshots()
         .map((snapshot) {
       final notifications = snapshot.docs
@@ -268,80 +260,57 @@ class FirestoreService {
     });
   }
 
-  // Mark notification as read
-  Future<void> markNotificationRead(String notifId) async {
+  // 🚀 NEW: Requires userId to locate the subcollection
+  Future<void> markNotificationRead(String userId, String notifId) async {
     await _firestore
-        .collection(AppConstants.notificationsCollection)
+        .collection(AppConstants.usersCollection)
+        .doc(userId)
+        .collection('notifications')
         .doc(notifId)
         .update({'read': true});
   }
 
-  // ==================== ARCHIVING (RELATIONAL CLEANUP) ====================
+  // ==================== ARCHIVING (MAINTAINS HIERARCHY) ====================
 
-  /// Archive a completed ride and its related bookings.
-  /// Moves ride → ride_history, bookings → booking_history,
-  /// then deletes originals from active collections.
   Future<void> archiveCompletedRide(String rideId) async {
     final batch = _firestore.batch();
 
-    // 1. Read the ride document
-    final rideDoc = await _firestore
-        .collection(AppConstants.ridesCollection)
-        .doc(rideId)
-        .get();
-
+    final rideDoc = await _firestore.collection(AppConstants.ridesCollection).doc(rideId).get();
     if (!rideDoc.exists) return;
 
-    // 2. Copy ride to ride_history (preserving the same doc ID)
-    batch.set(
-      _firestore.collection(AppConstants.rideHistoryCollection).doc(rideId),
-      {
-        ...rideDoc.data()!,
-        'archivedAt': FieldValue.serverTimestamp(),
-      },
-    );
+    // 1. Copy ride to history
+    final historyRideRef = _firestore.collection(AppConstants.rideHistoryCollection).doc(rideId);
+    batch.set(historyRideRef, {
+      ...rideDoc.data()!,
+      'archivedAt': FieldValue.serverTimestamp(),
+    });
 
-    // 3. Delete ride from active collection
-    batch.delete(
-      _firestore.collection(AppConstants.ridesCollection).doc(rideId),
-    );
-
-    // 4. Read all related bookings
+    // 2. Fetch all bookings from the subcollection
     final bookingsSnapshot = await _firestore
-        .collection(AppConstants.bookingsCollection)
-        .where('rideId', isEqualTo: rideId)
+        .collection(AppConstants.ridesCollection)
+        .doc(rideId)
+        .collection('bookings')
         .get();
 
-    // 5. Copy each booking to booking_history, then delete original
+    // 3. Move bookings to the history subcollection and delete the active ones
     for (final bookingDoc in bookingsSnapshot.docs) {
-      batch.set(
-        _firestore
-            .collection(AppConstants.bookingHistoryCollection)
-            .doc(bookingDoc.id),
-        {
-          ...bookingDoc.data(),
-          'archivedAt': FieldValue.serverTimestamp(),
-        },
-      );
+      final historyBookingRef = historyRideRef.collection('bookings').doc(bookingDoc.id);
+      
+      batch.set(historyBookingRef, {
+        ...bookingDoc.data(),
+        'archivedAt': FieldValue.serverTimestamp(),
+      });
       batch.delete(bookingDoc.reference);
     }
 
-    // 6. Also clean up driver_locations if any
-    final driverLocDoc = await _firestore
-        .collection(AppConstants.driverLocationsCollection)
-        .doc(rideId)
-        .get();
-    if (driverLocDoc.exists) {
-      batch.delete(driverLocDoc.reference);
-    }
+    // 4. Delete the active ride
+    batch.delete(rideDoc.reference);
 
-    // 7. Execute all operations atomically
     await batch.commit();
   }
 
   // ==================== HISTORY QUERIES ====================
 
-  /// Get completed rides by driver from ride_history collection.
   Stream<List<RideModel>> getDriverRideHistory(String driverId) {
     return _firestore
         .collection(AppConstants.rideHistoryCollection)
@@ -356,10 +325,10 @@ class FirestoreService {
     });
   }
 
-  /// Get completed bookings by passenger from booking_history collection.
   Stream<List<BookingModel>> getPassengerBookingHistory(String passengerId) {
+    // 🚀 NEW: Uses collectionGroup so it searches inside all archived rides
     return _firestore
-        .collection(AppConstants.bookingHistoryCollection)
+        .collectionGroup('bookings')
         .where('passengerId', isEqualTo: passengerId)
         .snapshots()
         .map((snapshot) {

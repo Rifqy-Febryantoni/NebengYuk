@@ -51,7 +51,7 @@ class ActiveBookingScreen extends StatelessWidget {
       backgroundColor: AppColors.background,
       appBar: AppBar(title: const Text('Status Perjalanan')),
       body: StreamBuilder<BookingModel?>(
-        stream: firestoreService.getBookingStream(bookingId),
+        stream: firestoreService.getBookingStream(rideId, bookingId),
         builder: (context, bookingSnapshot) {
           if (bookingSnapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());

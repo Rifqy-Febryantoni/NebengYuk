@@ -228,6 +228,7 @@ class DriverDashboardScreen extends StatelessWidget {
                           ride: ride,
                           onAccept: () async {
                             await firestoreService.updateBookingStatus(
+                              rideId, 
                               booking.bookingId,
                               AppConstants.bookingAccepted,
                             );

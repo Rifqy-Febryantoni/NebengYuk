@@ -217,6 +217,7 @@ class _PickupNavigationScreenState extends State<PickupNavigationScreen> {
     for (final booking in bookings) {
       if (booking.status == AppConstants.bookingAccepted) {
         await _firestoreService.updateBookingStatus(
+          widget.rideId,
           booking.bookingId,
           AppConstants.bookingCompleted,
         );

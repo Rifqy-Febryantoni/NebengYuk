@@ -60,7 +60,7 @@ class NotificationsScreen extends StatelessWidget {
                 notification: notif,
                 onTap: () {
                   if (!notif.read) {
-                    firestoreService.markNotificationRead(notif.notifId);
+                    firestoreService.markNotificationRead(userId, notif.notifId);
                   }
                 },
               );
